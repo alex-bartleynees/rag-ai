@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -7,6 +7,7 @@ class Chunk:
     text: str
     source: Path
     position: int
+    heading: str | None = field(default=None, kw_only=True)
 
 
 @dataclass

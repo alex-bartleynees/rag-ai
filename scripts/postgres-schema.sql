@@ -1,3 +1,5 @@
+BEGIN;
+
 CREATE EXTENSION IF NOT EXISTS vector;
 
 CREATE TABLE IF NOT EXISTS documents (
@@ -6,12 +8,16 @@ CREATE TABLE IF NOT EXISTS documents (
     chunk_index INTEGER NOT NULL,
     heading     TEXT,
     content     TEXT NOT NULL,
+    tags        TEXT[] NOT NULL DEFAULT '{}',
     embedding   vector(768),
     created_at  TIMESTAMPTZ DEFAULT now(),
     UNIQUE (source_file, chunk_index)
 );
 
-CREATE INDEX ON documents
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS heading TEXT;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS tags TEXT[] NOT NULL DEFAULT '{}';
+
+CREATE INDEX IF NOT EXISTS documents_embedding_idx ON documents
     USING hnsw (embedding vector_cosine_ops);
 
 CREATE TABLE IF NOT EXISTS ingested_files (
@@ -32,8 +38,10 @@ CREATE TABLE IF NOT EXISTS memories (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX ON memories
+CREATE INDEX IF NOT EXISTS memories_embedding_idx ON memories
     USING hnsw (embedding vector_cosine_ops);
 
-CREATE INDEX ON documents (source_file);
-CREATE INDEX ON ingested_files (source_file);
+CREATE INDEX IF NOT EXISTS documents_source_file_idx ON documents (source_file);
+CREATE INDEX IF NOT EXISTS ingested_files_source_file_idx ON ingested_files (source_file);
+
+COMMIT;

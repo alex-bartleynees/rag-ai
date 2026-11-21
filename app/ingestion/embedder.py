@@ -1,7 +1,7 @@
 import itertools
 import logging
+from collections.abc import AsyncGenerator, Iterable
 from time import perf_counter
-from typing import AsyncGenerator, Iterable
 
 from openai import AsyncOpenAI
 
@@ -37,11 +37,14 @@ async def embed_chunks(
             settings.embedding_model, len(embeddings.data), batch[0].source,
             perf_counter() - started,
         )
+        if sorted(item.index for item in embeddings.data) != list(range(len(batch))):
+            raise ValueError("Embedding response must contain one vector per input")
         for data_item in embeddings.data:
             chunk = batch[data_item.index]
             yield EmbeddedChunk(
                 text=chunk.text,
                 source=chunk.source,
                 position=chunk.position,
+                heading=chunk.heading,
                 embedding=data_item.embedding,
             )

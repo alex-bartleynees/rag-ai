@@ -3,6 +3,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+
 @pytest.fixture()
 def mock_settings(mocker):
     fake = MagicMock()
@@ -15,7 +16,7 @@ def mock_settings(mocker):
     return fake
 
 
-from app.ingestion.chunker import chunk_text, extract_text_from_file, iter_files  # noqa: E402
+from app.ingestion.chunker import chunk_text, extract_text_from_file, iter_files
 
 
 def test_chunk_text_single_chunk():
@@ -53,8 +54,8 @@ def test_chunk_text_splits_on_double_newline(mock_settings):
 
 def test_chunk_text_overlap_carries_tail(mock_settings):
     # Arrange
-    mock_settings.chunk_size = 3 
-    mock_settings.chunk_overlap = 2 
+    mock_settings.chunk_size = 5
+    mock_settings.chunk_overlap = 2
     source = Path("doc.md")
     text = "AAAAAAAAAA\n\nBBBBBBBBBB\n\nCCCCCCCCCC"
 
@@ -154,3 +155,38 @@ def test_iter_files_recurses(tmp_path):
 
     # Assert
     assert any(p.name == "deep.md" for p in found)
+
+
+def test_markdown_heading_paths_and_frontmatter():
+    text = (
+        "\ufeff---\r\ntags: [hidden]\r\n...\r\n"
+        "Introduction\r\n\r\n# Guide #\r\n\r\n"
+        "Setup\r\n-----\r\n\r\n~~~sh\r\n# a shell comment\r\n~~~\r\n"
+        "### Options\r\n\r\nSome flags.\r\n"
+        "## Usage\r\n\r\nUse it."
+    )
+    chunks = list(chunk_text(Path("guide.md"), text))
+    assert [(chunk.position, chunk.heading, chunk.text) for chunk in chunks] == [
+        (0, None, "Introduction"),
+        (1, "Guide > Setup", "~~~sh\n# a shell comment\n~~~"),
+        (2, "Guide > Setup > Options", "Some flags."),
+        (3, "Guide > Usage", "Use it."),
+    ]
+
+
+@pytest.mark.parametrize("configured", [False, True])
+def test_file_discovery_uses_only_configured_ignore_patterns(tmp_path, mock_settings, configured):
+    templates = "_System/Templates/example.md"
+    nested_templates = "nested/_System/Templates/example.md"
+    conflict = "nested/example.sync-conflict-123.md"
+    keep = "nested/keep.md"
+    files = {templates, nested_templates, conflict, keep}
+
+    for name in files:
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("Content")
+
+    mock_settings.docs_ignore_patterns = ["_System/Templates/", "*.sync-conflict-*"] if configured else []
+    expected = {nested_templates, keep} if configured else files
+    assert {path.relative_to(tmp_path).as_posix() for path in iter_files(tmp_path)} == expected

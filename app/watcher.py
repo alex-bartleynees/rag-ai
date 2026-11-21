@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import stat
 from pathlib import Path
 
 from watchdog.events import FileSystemEventHandler
@@ -10,7 +11,12 @@ from app.ai_client import get_ai_client
 from app.config import settings
 from app.db import get_pg_pool
 from app.ingestion.chunker import is_ignored, iter_files
-from app.ingestion.pipeline import ingest_file, remove_ingested_documents
+from app.ingestion.pipeline import (
+    INDEX_PREFIX,
+    ingest_file,
+    legacy_relative_sources,
+    remove_ingested_documents,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +25,7 @@ class FileWatcher(FileSystemEventHandler):
     """Watch first, reconcile on startup, and process one file at a time."""
 
     def __init__(self, directory: str):
+        self.configured_directory = Path(directory)
         self.directory = Path(os.path.abspath(directory))
         self.loop = asyncio.get_running_loop()
         self.observer = Observer()
@@ -88,18 +95,35 @@ class FileWatcher(FileSystemEventHandler):
         self.status["discovered"] = len(files)
         pool = get_pg_pool()
         async with pool.connection() as conn:
-            cursor = await conn.execute("SELECT source_file FROM ingested_files")
+            cursor = await conn.execute(
+                """
+                SELECT source_file, content_hash FROM ingested_files
+                UNION ALL
+                SELECT DISTINCT d.source_file, NULL FROM documents d
+                WHERE NOT EXISTS (SELECT 1 FROM ingested_files i WHERE i.source_file = d.source_file)
+                """
+            )
             indexed = await cursor.fetchall()
-        indexed_sources = {source for (source,) in indexed}
-        for (source,) in indexed:
+        for source, digest in indexed:
             path = Path(source)
-            absolute = Path(os.path.abspath(path))
+            candidate = self.directory / path
+            # Older bulk ingestion could store a path relative to the process.
+            if (
+                not path.is_absolute()
+                and not self.configured_directory.is_absolute()
+                and digest is not None
+                and not digest.startswith(INDEX_PREFIX)
+            ):
+                legacy = Path(os.path.abspath(path))
+                if legacy.is_relative_to(self.directory):
+                    candidate = legacy
+            absolute = Path(os.path.abspath(candidate))
             if not absolute.is_relative_to(self.directory):
                 continue
             try:
-                await asyncio.to_thread(path.stat)
-                missing = False
-            except FileNotFoundError:
+                file_stat = await asyncio.to_thread(absolute.stat)
+                missing = not stat.S_ISREG(file_stat.st_mode)
+            except (FileNotFoundError, NotADirectoryError):
                 missing = True
             if missing or is_ignored(absolute, self.directory) or path.suffix[1:] not in settings.supported_file_types:
                 await remove_ingested_documents(pool, path)
@@ -136,12 +160,21 @@ class FileWatcher(FileSystemEventHandler):
             self.status.update(state="ingesting", current_file=str(path))
             try:
                 try:
-                    await asyncio.to_thread(path.stat)
-                except FileNotFoundError:
-                    await remove_ingested_documents(get_pg_pool(), path)
+                    file_stat = await asyncio.to_thread(path.stat)
+                    missing = not stat.S_ISREG(file_stat.st_mode)
+                except (FileNotFoundError, NotADirectoryError):
+                    missing = True
+                if missing:
+                    source = path.relative_to(self.directory)
+                    await remove_ingested_documents(
+                        get_pg_pool(), source, path,
+                        legacy_sources=legacy_relative_sources(self.configured_directory, source),
+                    )
                     self.status["deleted"] += 1
                 else:
-                    changed = await ingest_file(path, get_ai_client(), get_pg_pool())
+                    changed = await ingest_file(
+                        path, get_ai_client(), get_pg_pool(), self.configured_directory
+                    )
                     self.status["ingested" if changed else "unchanged"] += 1
             except Exception:
                 logger.exception("File ingestion failed: %s attempt=%d", path, attempt + 1)

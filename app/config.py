@@ -1,5 +1,7 @@
+import os
 from pathlib import Path
 
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,9 +16,28 @@ class Settings(BaseSettings):
     embedding_model: str = "nomic-embed-text"
     embedding_dimensions: int = 768
 
+    dependency_timeout_seconds: float = Field(default=2, gt=0)
+    embedding_probe_timeout_seconds: float = Field(default=60, gt=0)
+    startup_retry_seconds: float = Field(default=1, gt=0)
+    startup_retry_max_seconds: float = Field(default=30, gt=0)
+    retrieval_timeout_seconds: float = Field(default=10.0, gt=0, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def validate_retry_delays(self):
+        if self.startup_retry_max_seconds < self.startup_retry_seconds:
+            raise ValueError("Startup retry maximum must be at least the initial delay")
+        return self
+
     # Ingestion
     docs_dir: str
-    docs_ignore_patterns: list[str] = [".obsidian", ".git", ".trash", ".tmp-*", "*.tmp", "~*"]
+    docs_ignore_patterns: list[str] = [
+        ".obsidian",
+        ".git",
+        ".trash",
+        ".tmp-*",
+        "*.tmp",
+        "~*",
+    ]
     plain_text_formats: list[str] = ["txt", "md"]
     markup_formats: list[str] = ["html"]
     supported_file_types: list[str] = plain_text_formats + markup_formats
@@ -42,4 +63,11 @@ class Settings(BaseSettings):
     )
 
 
-settings = Settings()
+def load_settings() -> Settings:
+    env_file = os.environ.get("RAG_AI_ENV_FILE")
+    if env_file is None:
+        return Settings()
+    return Settings(_env_file=env_file or None)
+
+
+settings = load_settings()

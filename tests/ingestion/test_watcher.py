@@ -2,11 +2,11 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from watchdog.events import FileMovedEvent
 
 from app.config import settings
 from app.ingestion.chunker import is_ignored, iter_files
 from app.watcher import FileWatcher
-from watchdog.events import FileMovedEvent
 
 
 def test_ignore_patterns_prune_directories_and_files(tmp_path, monkeypatch):
@@ -81,7 +81,7 @@ async def test_startup_queues_existing_files_and_cleans_missing_or_ignored(tmp_p
     outside = tmp_path.parent / "outside.md"
     monkeypatch.setattr(settings, "docs_ignore_patterns", ["ignore.md"])
     cursor = AsyncMock()
-    cursor.fetchall.return_value = [(str(p),) for p in (keep, ignored, missing, outside)]
+    cursor.fetchall.return_value = [(keep.name, "2:hash"), (ignored.name, "2:hash"), (str(missing), "legacy"), (str(outside), "legacy")]
     conn = AsyncMock()
     conn.execute.return_value = cursor
     pool = MagicMock()
@@ -92,7 +92,7 @@ async def test_startup_queues_existing_files_and_cleans_missing_or_ignored(tmp_p
     watcher = FileWatcher(str(tmp_path))
     await watcher.reconcile()
     assert list(watcher.pending) == [keep]
-    assert {call.args[1] for call in remove.await_args_list} == {ignored, missing}
+    assert {call.args[1] for call in remove.await_args_list} == {ignored.relative_to(tmp_path), missing}
 
 
 async def test_move_queues_both_paths(tmp_path):

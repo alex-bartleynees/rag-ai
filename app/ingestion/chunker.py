@@ -1,10 +1,12 @@
 import logging
 import os
-from fnmatch import fnmatchcase
+import re
 from collections.abc import Iterator
+from fnmatch import fnmatchcase
 from pathlib import Path
 
 from bs4 import BeautifulSoup
+from yaml import YAMLError, safe_load
 
 from app.config import settings
 from app.ingestion.models import Chunk
@@ -69,47 +71,108 @@ def read_file(file_path: Path) -> str | None:
         return None
 
 
-def chunk_text(source: Path, text: str) -> Iterator[Chunk]:
-    """Return an iterator that yields chunks of the given text with specified size and overlap."""
-    # Split text on \n\n to preserve paragraphs
-    logger.debug("Chunking text from %s", source)
-    paragraphs = text.split("\n\n")
-    current_chunk = ""
-    position = 0
-    chunk_size = (
-        settings.chunk_size * 4
-    )  # Approximate character count (assuming average 4 chars per token)
-    chunk_overlap = (
-        settings.chunk_overlap * 4
-    )  # Approximate character count for overlap
+_ATX_HEADING = re.compile(r" {0,3}(#{1,6})(?:[ \t]+(.*)|$)")
+_SETEXT_HEADING = re.compile(r" {0,3}(=+|-+)[ \t]*$")
+_FENCE = re.compile(r" {0,3}(`{3,}|~{3,})(.*)")
 
-    for paragraph in paragraphs:
-        if len(paragraph) > chunk_size:
-            # Split the paragraph into smaller chunks
-            start = 0
-            while start < len(paragraph):
-                end = min(start + chunk_size, len(paragraph))
-                sub_chunk = paragraph[start:end]
-                yield Chunk(
-                    text=sub_chunk.strip(),
-                    source=source,
-                    position=position,
-                )
-                position += 1
-                start += chunk_size - chunk_overlap
+
+def split_frontmatter(text: str) -> tuple[str, str]:
+    """Separate a top-of-file YAML block from the Markdown body."""
+    lines = text.removeprefix("\ufeff").splitlines(keepends=True)
+    if lines and lines[0].rstrip() == "---":
+        for index, line in enumerate(lines[1:], start=1):
+            if line.rstrip() in {"---", "..."}:
+                return "".join(lines[1:index]), "".join(lines[index + 1:])
+    return "", text.removeprefix("\ufeff")
+
+
+def markdown_tags(frontmatter: str) -> list[str]:
+    try:
+        properties = safe_load(frontmatter)
+    except YAMLError:
+        logger.warning("Ignoring malformed Markdown frontmatter tags")
+        return []
+    tags = properties.get("tags") if isinstance(properties, dict) else None
+    if isinstance(tags, str):
+        tags = [tags]
+    return [tag for tag in tags if isinstance(tag, str) and tag.strip()] if isinstance(tags, list) else []
+
+
+def markdown_sections(text: str) -> Iterator[tuple[str | None, str]]:
+    """Yield Markdown section bodies with their enclosing heading paths."""
+    _, body_text = split_frontmatter(text)
+    lines = body_text.splitlines()
+
+    headings: list[tuple[int, str]] = []
+    body: list[str] = []
+    fence: str | None = None
+    for line in lines:
+        marker = _FENCE.fullmatch(line)
+        if fence is not None:
+            body.append(line)
+            if marker and marker[1].startswith(fence) and not marker[2].strip():
+                fence = None
             continue
-        if len(current_chunk) + len(paragraph) + 2 >= chunk_size:
-            yield Chunk(
-                text=current_chunk.strip(),
-                source=source,
-                position=position,
-            )
-            position += 1
-            current_chunk = current_chunk[-chunk_overlap:] + paragraph + "\n\n"
-        else:
-            current_chunk += paragraph + "\n\n"
+        if marker and (marker[1][0] == "~" or "`" not in marker[2]):
+            fence = marker[1]
+            body.append(line)
+            continue
 
-    # Process any remaining text
-    current_chunk = current_chunk.strip()
-    if current_chunk:
-        yield Chunk(text=current_chunk, source=source, position=position)
+        atx = _ATX_HEADING.fullmatch(line)
+        setext = _SETEXT_HEADING.fullmatch(line)
+        if atx:
+            level = len(atx[1])
+            title = re.sub(r"(?:^|[ \t]+)#+[ \t]*$", "", atx[2] or "").strip()
+        elif setext and body and _is_setext_title(body[-1]):
+            level = 1 if setext[1][0] == "=" else 2
+            title = body.pop().strip()
+        else:
+            body.append(line)
+            continue
+
+        yield " > ".join(title for _, title in headings) or None, "\n".join(body)
+        while headings and headings[-1][0] >= level:
+            headings.pop()
+        if title:
+            headings.append((level, title))
+        body.clear()
+
+    yield " > ".join(title for _, title in headings) or None, "\n".join(body)
+
+
+def _is_setext_title(line: str) -> bool:
+    return bool(line.strip()) and not re.match(
+        r"(?: {4}|\t| {0,3}(?:>|[-+*][ \t]|\d+[.)][ \t]|(?:`{3,}|~{3,})))", line
+    )
+
+
+def chunk_text(source: Path, text: str) -> Iterator[Chunk]:
+    """Chunk each section independently and number chunks across the file."""
+    size = settings.chunk_size * 4
+    overlap = settings.chunk_overlap * 4
+    if not 0 <= overlap < size:
+        raise ValueError("Chunk overlap must be non-negative and smaller than chunk size")
+
+    sections = markdown_sections(text) if source.suffix == ".md" else [(None, text)]
+    position = 0
+    for heading, body in sections:
+        remaining = body.strip()
+        while remaining:
+            end = min(size, len(remaining))
+            next_start = end - overlap
+            if end < len(remaining):
+                boundary = remaining.rfind("\n\n", overlap + 1, end + 1)
+                if boundary != -1:
+                    end = boundary
+                    paragraph_start = boundary + 2
+                    paragraph_end = remaining.find("\n\n", paragraph_start, paragraph_start + size + 2)
+                    if paragraph_end == -1:
+                        paragraph_end = min(len(remaining), paragraph_start + size)
+                    # Keep the next paragraph whole when it fits without full overlap.
+                    carry = min(overlap, max(0, size - (paragraph_end - paragraph_start) - 2))
+                    next_start = boundary - carry if carry else boundary + 2
+            yield Chunk(remaining[:end].strip(), source, position, heading=heading)
+            position += 1
+            if end == len(remaining):
+                break
+            remaining = remaining[next_start:].lstrip()

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from psycopg_pool import AsyncConnectionPool
@@ -13,18 +14,27 @@ async def init_postgres():
     connection_string = settings.postgres_url
     global _pg_pool
     _pg_pool = AsyncConnectionPool(
-        connection_string, min_size=1, max_size=10, open=False
+        connection_string,
+        min_size=1,
+        max_size=10,
+        open=False,
+        kwargs={"connect_timeout": max(2, int(settings.dependency_timeout_seconds))},
     )
     await _pg_pool.open()
-    await _pg_pool.wait()
-    logger.info("Postgres connection pool initialized")
+
+
+async def check_postgres():
+    async with asyncio.timeout(settings.dependency_timeout_seconds):
+        async with get_pg_pool().connection() as conn:
+            await conn.execute("SELECT heading, tags, embedding FROM documents LIMIT 0")
+            await conn.execute("SELECT 1 FROM ingested_files LIMIT 0")
 
 
 async def close_postgres():
     global _pg_pool
-    if _pg_pool:
-        await _pg_pool.close()
-        _pg_pool = None
+    pool, _pg_pool = _pg_pool, None
+    if pool is not None:
+        await pool.close()
         logger.info("Postgres connection pool closed")
 
 
