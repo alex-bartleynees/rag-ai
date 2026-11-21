@@ -9,7 +9,6 @@ dependencies = [
     "openai>=1.50",           # openai SDK pointed at Ollama
     "psycopg[async,pool]>=3.1",
     "pgvector>=0.3",
-    "redis>=5.0",
     "pydantic-settings>=2.0", # for config.py
     "tiktoken>=0.7",          # token counting in chunker
     "watchfiles>=0.21",       # async folder watcher

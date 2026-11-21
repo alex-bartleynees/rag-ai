@@ -6,7 +6,7 @@ import logging
 
 from fastapi import FastAPI
 
-from app.db import get_pg_pool, get_redis
+from app.db import get_pg_pool
 from app.lifespan import lifespan
 from app.middleware import RequestIDMiddleware
 
@@ -33,12 +33,4 @@ async def health():
         logger.exception("Postgres health check failed")
         pg_status = "error"
 
-    try:
-        client = get_redis()
-        pong = await client.ping()
-        redis_status = "ok" if pong else "error"
-    except Exception:
-        logger.exception("Redis health check failed")
-        redis_status = "error"
-
-    return {"postgres": pg_status, "redis": redis_status}
+    return {"postgres": pg_status}

@@ -9,21 +9,11 @@ AI-powered documentation assistant using RAG (Retrieval-Augmented Generation). I
 | API | Python + FastAPI |
 | LLM / Embeddings | Ollama (`llama3.2` + `nomic-embed-text`, 768d) |
 | Vector store | PostgreSQL 17 + pgvector |
-| Cache / Sessions | Redis 7 |
 | Client | OpenAI-compatible (swap to Anthropic/OpenAI via env vars) |
 
 ## Architecture
 
-```
-Request
-  └─► Semantic cache check (Redis)
-        └─► Session history fetch (Redis, TTL-bound)
-              └─► Vector search — doc chunks (pgvector)
-                    └─► Memory search — long-term user memory (pgvector)
-                          └─► LLM (Ollama / any OpenAI-compatible endpoint)
-                                └─► Write cache + session (Redis)
-                                      └─► Async memory extraction → Postgres
-```
+PostgreSQL with pgvector stores the document index. Ollama supplies embeddings.
 
 **Ingestion:** watched folder (`DOCS_DIR`) → chunk → embed → pgvector.
 
@@ -65,7 +55,7 @@ ollama pull nomic-embed-text
 nix develop
 ```
 
-This drops you into a shell with Python 3.12, uv, psql, redis-cli, docker-compose, and just.
+This drops you into a shell with Python 3.12, uv, psql, docker-compose, and just.
 
 ### 2. Configure environment
 
@@ -132,9 +122,6 @@ curl http://localhost:8000/health
 # Connect to Postgres
 psql -h localhost -U postgres -d rag-ai
 
-# Connect to Redis
-redis-cli
-
 # Run tests
 pytest
 
@@ -154,7 +141,7 @@ uv sync --upgrade
 ```
 app/
   main.py          # FastAPI app + routes
-docker-compose.yml # Postgres + Redis
+docker-compose.yml # Postgres with pgvector
 pyproject.toml     # Dependencies + build config
 flake.nix          # Nix dev shell
 ```

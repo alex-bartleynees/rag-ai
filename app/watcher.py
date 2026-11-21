@@ -32,7 +32,7 @@ class FileWatcher(FileSystemEventHandler):
     def start(self):
         self.observer.schedule(self, str(self.directory), recursive=True)
         self.observer.start()
-        self.task = self.loop.create_task(self.run())
+        self.task = asyncio.create_task(self.run(), name="file_watcher")
         self.task.add_done_callback(self.worker_finished)
         logger.info("Started file watcher on directory: %s", self.directory)
 
@@ -104,19 +104,6 @@ class FileWatcher(FileSystemEventHandler):
             if missing or is_ignored(absolute, self.directory) or path.suffix[1:] not in settings.supported_file_types:
                 await remove_ingested_documents(pool, path)
                 self.status["deleted"] += 1
-            elif path != absolute:
-                # Older runs may have stored paths relative to the working directory.
-                if absolute.as_posix() in indexed_sources:
-                    await remove_ingested_documents(pool, path)
-                else:
-                    async with pool.connection() as conn:
-                        async with conn.transaction():
-                            for table in ("documents", "ingested_files"):
-                                await conn.execute(
-                                    f"UPDATE {table} SET source_file = %s WHERE source_file = %s",
-                                    (absolute.as_posix(), source),
-                                )
-                    indexed_sources.add(absolute.as_posix())
         for path in files:
             self.pending.setdefault(path, (self.loop.time(), 0))
         logger.info("Reconciled document directory: discovered=%d queued=%d", len(files), len(self.pending))

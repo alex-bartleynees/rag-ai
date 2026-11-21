@@ -21,7 +21,6 @@
 
             # Database tooling
             postgresql_17             # gives you psql client
-            redis                     # gives you redis-cli
 
             # Infra
             docker-compose

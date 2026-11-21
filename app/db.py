@@ -1,6 +1,5 @@
 import logging
 
-import redis.asyncio as aioredis
 from psycopg_pool import AsyncConnectionPool
 
 from app.config import settings
@@ -8,7 +7,6 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 _pg_pool: AsyncConnectionPool | None = None
-_redis_client: aioredis.Redis | None = None
 
 
 async def init_postgres():
@@ -22,16 +20,6 @@ async def init_postgres():
     logger.info("Postgres connection pool initialized")
 
 
-async def init_redis():
-    connection_string = settings.redis_url
-    global _redis_client
-    _redis_client = aioredis.from_url(
-        connection_string, encoding="utf-8", decode_responses=True
-    )
-    pong = await _redis_client.ping()
-    logger.info("Redis client initialized: %s", pong)
-
-
 async def close_postgres():
     global _pg_pool
     if _pg_pool:
@@ -40,21 +28,7 @@ async def close_postgres():
         logger.info("Postgres connection pool closed")
 
 
-async def close_redis():
-    global _redis_client
-    if _redis_client:
-        await _redis_client.aclose()
-        _redis_client = None
-        logger.info("Redis client closed")
-
-
 def get_pg_pool() -> AsyncConnectionPool:
     if _pg_pool is None:
         raise RuntimeError("Postgres pool not initialised")
     return _pg_pool
-
-
-def get_redis() -> aioredis.Redis:
-    if _redis_client is None:
-        raise RuntimeError("Redis not initialised")
-    return _redis_client

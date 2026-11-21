@@ -7,9 +7,6 @@ class Settings(BaseSettings):
     # Postgres
     postgres_url: str
 
-    # Redis
-    redis_url: str = "redis://localhost:6379"
-
     # Ollama
     llm_base_url: str = "http://localhost:11434/v1"
     llm_model: str = "llama3.2"
