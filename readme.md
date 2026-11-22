@@ -70,6 +70,20 @@ services.postgresql.settings.port = 5433;
 services.rag-ai.postgresUrl = "postgresql:///docs-user?host=/run/postgresql&port=5433";
 ```
 
+### Standalone Home Manager
+
+Without NixOS, `userBacking` runs Postgres 17 with pgvector and Ollama as user services attached to the same target. Postgres listens only on a Unix socket under `$XDG_RUNTIME_DIR` and stores its data in `$XDG_DATA_HOME/rag-ai/postgres`. `rag-ai-schema.service` creates the database, the `vector` extension, and the schema. `rag-ai-ollama-model.service` pulls `nomic-embed-text`. The module points `postgresUrl` and `ollamaUrl` at these services unless you set them.
+
+```nix
+services.rag-ai = {
+  enable = true;
+  docsDir = "/home/docs-user/documents";
+  userBacking.enable = true;
+};
+```
+
+Enable lingering (`loginctl enable-linger`) to start the services at boot.
+
 For an existing deployment, keep the data directory or volume and point `services.rag-ai.postgresUrl` (or `POSTGRES_URL` for a manual launch) at the intended database. Back up that database, stop the watcher, and apply `scripts/postgres-schema.sql` as a role that owns the affected tables or has equivalent privileges before restarting. If the `vector` extension is missing, have a database administrator create it in that database first. The schema adds missing objects in a transaction. The watcher reindexes older records it can match to the configured directory, and replacement rows become searchable as their files are reindexed.
 
 ```sh
